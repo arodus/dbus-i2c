@@ -4,6 +4,7 @@ from settingsdevice import SettingsDevice
 from settableservice import SettableService
 from collections import namedtuple
 import logging
+from datetime import datetime
 
 BASE_DEVICE_INSTANCE_ID = 1024
 PRODUCT_ID = 0
@@ -162,3 +163,103 @@ class DCSourceServiceMixin:
 
     def _increment_energy_usage(self, change):
         self._local_values['/History/EnergyOut'] += change
+
+
+class PVChargerServiceMixin:
+    """
+    Mixin for INA226 devices acting as solar/wind charger monitors.
+    Measures battery voltage and charging current on the output side of an external charge controller.
+    Shunt is placed between charge controller output and battery.
+    """
+    # Charger states from Victron documentation
+    STATE_OFF = 0
+    STATE_BULK = 3
+
+    # Error codes
+    ERROR_NONE = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _configure_service(self):
+        # Battery side measurements
+        self.service.add_path("/Dc/0/Voltage", None, gettextcallback=VOLTAGE_TEXT)
+        self.service.add_path("/Dc/0/Current", None, gettextcallback=CURRENT_TEXT)
+        
+        # Power measurements
+        self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
+        
+        # Energy yield (kWh) - both stored in settings for persistence
+        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True)
+        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True)
+        
+        # Charger state and mode
+        self.service.add_path("/State", self.STATE_BULK)
+        self.service.add_path("/Mode", 1)  # 1 = On, 4 = Off
+        self.service.add_path("/ErrorCode", self.ERROR_NONE)
+        
+        # MPPT operating mode (solarcharger only, not for plain PV inverters)
+        self.service.add_path("/MppOperationMode", 2)  # 0 = Off, 1 = Voltage/current limited, 2 = MPPT active
+        
+        # History
+        self.service.add_path("/History/Daily/0/Yield", 0, gettextcallback=ENERGY_TEXT)
+        self.service.add_path("/History/Daily/0/MaxPower", 0, gettextcallback=POWER_TEXT)
+        self.service.add_path("/History/Daily/1/Yield", 0, gettextcallback=ENERGY_TEXT)
+        self.service.add_path("/History/Daily/1/MaxPower", 0, gettextcallback=POWER_TEXT)
+        
+        # Initialize local values for batch updates
+        self._local_values = {}
+        for path, dbusobj in self.service._dbusobjects.items():
+            if not dbusobj._writeable:
+                self._local_values[path] = self.service[path]
+        self.lastPower = None
+        self._last_day = datetime.now().day  # Track day for daily reset
+
+    def _update_pv(self, voltage, current, power, now):
+        """
+        Update PV charger values.
+        
+        Args:
+            voltage: Battery voltage (V)
+            current: Charging current (A)
+            power: Charging power (W)
+            now: Timestamp
+        """
+        # Check if day has changed and reset daily statistics
+        current_day = datetime.now().day
+        if current_day != self._last_day:
+            # Roll over to yesterday's stats
+            self._local_values['/History/Daily/1/Yield'] = self._local_values['/History/Daily/0/Yield']
+            self._local_values['/History/Daily/1/MaxPower'] = self._local_values['/History/Daily/0/MaxPower']
+            # Reset today's stats
+            self._local_values['/History/Daily/0/Yield'] = 0
+            self._local_values['/History/Daily/0/MaxPower'] = 0
+            self._last_day = current_day
+        
+        self._local_values["/Dc/0/Voltage"] = voltage
+        self._local_values["/Dc/0/Current"] = current
+        self._local_values["/Yield/Power"] = power
+        
+        # Update daily max power
+        self._local_values["/History/Daily/0/MaxPower"] = max(power, self._local_values["/History/Daily/0/MaxPower"])
+        
+        # Determine charger state based on power
+        if power < 1:
+            self._local_values["/State"] = self.STATE_OFF
+            self._local_values["/MppOperationMode"] = 0
+        else:
+            self._local_values["/State"] = self.STATE_BULK
+            self._local_values["/MppOperationMode"] = 2
+        
+        # Integrate energy (kWh)
+        if self.lastPower is not None:
+            energy_delta = toKWh((self.lastPower.power + power)/2 * (now - self.lastPower.timestamp))
+            self._local_values['/Yield/User'] += energy_delta
+            self._local_values['/Yield/System'] += energy_delta
+            self._local_values['/History/Daily/0/Yield'] += energy_delta
+        
+        self.lastPower = PowerSample(power, now)
+
+    def publish(self):
+        for k,v in self._local_values.items():
+            self.service[k] = v
