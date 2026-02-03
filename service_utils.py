@@ -220,7 +220,7 @@ class PVChargerServiceMixin:
         self.add_settable_path("/History/Daily/0/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
         self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
         self.add_settable_path("/History/Daily/1/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
-        self.add_settable_path("/_LastDay", datetime.now().day, 1, 31, silent=True)  # Track day for rollover detection
+        self.add_settable_path("/History/LastDay", datetime.now().day, 1, 31, silent=True)  # Track day for rollover detection
         
         # Initialize local values for batch updates
         self._local_values = {}
@@ -234,7 +234,7 @@ class PVChargerServiceMixin:
         self._local_values['/History/Daily/0/MaxPower'] = self.service['/History/Daily/0/MaxPower']
         self._local_values['/History/Daily/1/Yield'] = self.service['/History/Daily/1/Yield']
         self._local_values['/History/Daily/1/MaxPower'] = self.service['/History/Daily/1/MaxPower']
-        self._local_values['/_LastDay'] = self.service['/_LastDay']
+        self._local_values['/History/LastDay'] = self.service['/History/LastDay']
         self.lastPower = None
 
     def _update_pv(self, voltage, current, power, now):
@@ -249,14 +249,14 @@ class PVChargerServiceMixin:
         """
         # Check if day has changed and reset daily statistics
         current_day = datetime.now().day
-        if current_day != self._local_values['/_LastDay']:
+        if current_day != self._local_values['/History/LastDay']:
             # Roll over to yesterday's stats
             self._local_values['/History/Daily/1/Yield'] = self._local_values['/History/Daily/0/Yield']
             self._local_values['/History/Daily/1/MaxPower'] = self._local_values['/History/Daily/0/MaxPower']
             # Reset today's stats
             self._local_values['/History/Daily/0/Yield'] = 0
             self._local_values['/History/Daily/0/MaxPower'] = 0
-            self._local_values['/_LastDay'] = current_day
+            self._local_values['/History/LastDay'] = current_day
         
         self._local_values["/Dc/0/Voltage"] = voltage
         self._local_values["/Dc/0/Current"] = current
