@@ -28,10 +28,16 @@ def toKWh(joules):
     return joules/3600/1000
 
 
+def toWh(watt_seconds):
+    """Convert watt-seconds to watt-hours"""
+    return watt_seconds / 3600
+
+
 VOLTAGE_TEXT = lambda path,value: "{:.2f}V".format(value)
 CURRENT_TEXT = lambda path,value: "{:.3f}A".format(value)
 POWER_TEXT = lambda path,value: "{:.2f}W".format(value)
 ENERGY_TEXT = lambda path,value: "{:.6f}kWh".format(value)
+ENERGY_WH_TEXT = lambda path,value: "{:.1f}Wh".format(value)
 
 
 def getServiceName(serviceType, i2cBusNum, i2cAddr):
@@ -204,8 +210,8 @@ class PVChargerServiceMixin:
         self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
         
         # Energy yield (kWh) - stored in settings for persistence across restarts
-        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
-        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True)
+        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True)
         
         # Charger state and mode
         self.service.add_path("/State", self.STATE_BULK)
@@ -235,7 +241,12 @@ class PVChargerServiceMixin:
         self._local_values['/History/Daily/1/Yield'] = self.service['/History/Daily/1/Yield']
         self._local_values['/History/Daily/1/MaxPower'] = self.service['/History/Daily/1/MaxPower']
         self._local_values['/History/LastDay'] = self.service['/History/LastDay']
+        # Internal Wh accumulators for precision (not published directly)
+        self._yield_user_wh = self._local_values['/Yield/User'] * 1000  # Convert from kWh to Wh
+        self._yield_system_wh = self._local_values['/Yield/System'] * 1000
+        self._daily_yield_wh = self._local_values['/History/Daily/0/Yield'] * 1000
         self.lastPower = None
+        self._first_update = True  # Skip energy integration on first update after restart
 
     def _update_pv(self, voltage, current, power, now):
         """
@@ -257,6 +268,7 @@ class PVChargerServiceMixin:
             self._local_values['/History/Daily/0/Yield'] = 0
             self._local_values['/History/Daily/0/MaxPower'] = 0
             self._local_values['/History/LastDay'] = current_day
+            self._daily_yield_wh = 0  # Reset internal Wh accumulator
         
         self._local_values["/Dc/0/Voltage"] = voltage
         self._local_values["/Dc/0/Current"] = current
@@ -273,13 +285,18 @@ class PVChargerServiceMixin:
             self._local_values["/State"] = self.STATE_BULK
             self._local_values["/MppOperationMode"] = 2
         
-        # Integrate energy (kWh)
-        if self.lastPower is not None:
-            energy_delta = toKWh((self.lastPower.power + power)/2 * (now - self.lastPower.timestamp))
-            self._local_values['/Yield/User'] += energy_delta
-            self._local_values['/Yield/System'] += energy_delta
-            self._local_values['/History/Daily/0/Yield'] += energy_delta
+        # Integrate energy (accumulate in Wh for precision)
+        if self.lastPower is not None and not self._first_update:
+            energy_delta_wh = toWh((self.lastPower.power + power)/2 * (now - self.lastPower.timestamp))
+            self._yield_user_wh += energy_delta_wh
+            self._yield_system_wh += energy_delta_wh
+            self._daily_yield_wh += energy_delta_wh
+            # Update kWh values for publishing
+            self._local_values['/Yield/User'] = self._yield_user_wh / 1000
+            self._local_values['/Yield/System'] = self._yield_system_wh / 1000
+            self._local_values['/History/Daily/0/Yield'] = self._daily_yield_wh / 1000
         
+        self._first_update = False
         self.lastPower = PowerSample(power, now)
 
     def publish(self):
