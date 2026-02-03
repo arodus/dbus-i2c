@@ -209,7 +209,7 @@ class PVChargerServiceMixin:
         # Power measurements
         self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
         
-        # Energy yield (kWh) - stored in settings for persistence across restarts
+        # Energy yield - stored in kWh as per Victron standard, UI will format as Wh/kWh automatically
         self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True)
         self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True)
         
@@ -221,10 +221,10 @@ class PVChargerServiceMixin:
         # MPPT operating mode (solarcharger only, not for plain PV inverters)
         self.service.add_path("/MppOperationMode", 2)  # 0 = Off, 1 = Voltage/current limited, 2 = MPPT active
         
-        # History - daily values also persist to survive restarts
-        self.add_settable_path("/History/Daily/0/Yield", 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        # History - daily values also persist to survive restarts, stored in kWh
+        self.add_settable_path("/History/Daily/0/Yield", 0, 0, 1000000, silent=True)
         self.add_settable_path("/History/Daily/0/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
-        self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000, silent=True)
         self.add_settable_path("/History/Daily/1/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
         self.add_settable_path("/History/LastDay", datetime.now().day, 1, 31, silent=True)  # Track day for rollover detection
         
