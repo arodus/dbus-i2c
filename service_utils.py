@@ -65,6 +65,20 @@ class SimpleI2CService(SettableService):
         self.service.add_path("/I2C/Address", "{:#04x}".format(i2cAddr))
         self.service.register()
 
+    def add_settable_path(self, subPath, initialValue, minValue=0, maxValue=0, silent=False, **kwargs):
+        """Override to handle silent parameter separately from DBus path kwargs"""
+        settingName = subPath[1:].lower()
+        self.service.add_path(subPath, initialValue, writeable=True, 
+                             onchangecallback=lambda path, newValue: self._value_changed(settingName, newValue), **kwargs)
+        self.supportedSettings[settingName] = [
+            self._get_settings_path(subPath),
+            initialValue,
+            minValue,
+            maxValue,
+            silent
+        ]
+        self.settablePaths[settingName] = subPath
+
     def error(self, msg):
         self.logger.exception(msg)
         self.service["/Connected"] = 0
@@ -189,9 +203,9 @@ class PVChargerServiceMixin:
         # Power measurements
         self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
         
-        # Energy yield (kWh) - both stored in settings for persistence
-        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True)
-        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True)
+        # Energy yield (kWh) - stored in settings for persistence across restarts
+        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
         
         # Charger state and mode
         self.service.add_path("/State", self.STATE_BULK)
@@ -201,19 +215,27 @@ class PVChargerServiceMixin:
         # MPPT operating mode (solarcharger only, not for plain PV inverters)
         self.service.add_path("/MppOperationMode", 2)  # 0 = Off, 1 = Voltage/current limited, 2 = MPPT active
         
-        # History
-        self.service.add_path("/History/Daily/0/Yield", 0, gettextcallback=ENERGY_TEXT)
-        self.service.add_path("/History/Daily/0/MaxPower", 0, gettextcallback=POWER_TEXT)
-        self.service.add_path("/History/Daily/1/Yield", 0, gettextcallback=ENERGY_TEXT)
-        self.service.add_path("/History/Daily/1/MaxPower", 0, gettextcallback=POWER_TEXT)
+        # History - daily values also persist to survive restarts
+        self.add_settable_path("/History/Daily/0/Yield", 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        self.add_settable_path("/History/Daily/0/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
+        self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000, silent=True, gettextcallback=ENERGY_TEXT)
+        self.add_settable_path("/History/Daily/1/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
+        self.add_settable_path("/_LastDay", datetime.now().day, 1, 31, silent=True)  # Track day for rollover detection
         
         # Initialize local values for batch updates
         self._local_values = {}
         for path, dbusobj in self.service._dbusobjects.items():
             if not dbusobj._writeable:
                 self._local_values[path] = self.service[path]
+        # Manually add ALL settable paths to local values for batch updates and persistence
+        self._local_values['/Yield/User'] = self.service['/Yield/User']
+        self._local_values['/Yield/System'] = self.service['/Yield/System']
+        self._local_values['/History/Daily/0/Yield'] = self.service['/History/Daily/0/Yield']
+        self._local_values['/History/Daily/0/MaxPower'] = self.service['/History/Daily/0/MaxPower']
+        self._local_values['/History/Daily/1/Yield'] = self.service['/History/Daily/1/Yield']
+        self._local_values['/History/Daily/1/MaxPower'] = self.service['/History/Daily/1/MaxPower']
+        self._local_values['/_LastDay'] = self.service['/_LastDay']
         self.lastPower = None
-        self._last_day = datetime.now().day  # Track day for daily reset
 
     def _update_pv(self, voltage, current, power, now):
         """
@@ -227,14 +249,14 @@ class PVChargerServiceMixin:
         """
         # Check if day has changed and reset daily statistics
         current_day = datetime.now().day
-        if current_day != self._last_day:
+        if current_day != self._local_values['/_LastDay']:
             # Roll over to yesterday's stats
             self._local_values['/History/Daily/1/Yield'] = self._local_values['/History/Daily/0/Yield']
             self._local_values['/History/Daily/1/MaxPower'] = self._local_values['/History/Daily/0/MaxPower']
             # Reset today's stats
             self._local_values['/History/Daily/0/Yield'] = 0
             self._local_values['/History/Daily/0/MaxPower'] = 0
-            self._last_day = current_day
+            self._local_values['/_LastDay'] = current_day
         
         self._local_values["/Dc/0/Voltage"] = voltage
         self._local_values["/Dc/0/Current"] = current
@@ -263,3 +285,4 @@ class PVChargerServiceMixin:
     def publish(self):
         for k,v in self._local_values.items():
             self.service[k] = v
+
