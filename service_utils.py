@@ -60,13 +60,15 @@ class SimpleI2CService(SettableService):
         self.i2cBus = i2cBus
         self.i2cAddr = i2cAddr
         self.deviceName = deviceName
+        self.productId = kwargs.pop('productId', PRODUCT_ID)  # Allow productId from config, default to 0
+        self.logger.info(f"Using product ID: {self.productId:#06x} ({self.productId})")
         self.service = VeDbusService(getServiceName(serviceType, i2cBus, i2cAddr), conn, register=False)
         self.add_settable_path("/CustomName", "", 0, 0)
         self._configure_service(**kwargs)
         self._init_settings(conn)
         di = self.register_device_instance(serviceType, getDeviceAddress(i2cBus, i2cAddr), getDeviceInstance(i2cBus, i2cAddr))
         self.service.add_mandatory_paths(__file__, VERSION, 'I2C',
-                di, PRODUCT_ID, deviceName, FIRMWARE_VERSION, HARDWARE_VERSION, CONNECTED)
+                di, self.productId, deviceName, FIRMWARE_VERSION, HARDWARE_VERSION, CONNECTED)
         self.service.add_path("/I2C/Bus", i2cBus)
         self.service.add_path("/I2C/Address", "{:#04x}".format(i2cAddr))
         self.service.register()
@@ -127,10 +129,10 @@ class DCI2CService(SimpleI2CService):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _configure_service(self):
+    def _configure_service(self, **kwargs):
         self.service.add_path("/Dc/0/Voltage", None, gettextcallback=VOLTAGE_TEXT)
         self.service.add_path("/Dc/0/Current", None, gettextcallback=CURRENT_TEXT)
-        self._configure_energy_history()
+        self._configure_energy_history(**kwargs)
         self.service.add_path("/Alarms/LowVoltage", 0)
         self.service.add_path("/Alarms/HighVoltage", 0)
         self.service.add_path("/Alarms/LowTemperature", 0)
@@ -167,22 +169,41 @@ class DCLoadServiceMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _configure_energy_history(self):
-        self.service.add_path('/History/EnergyIn', 0, gettextcallback=ENERGY_TEXT)
+    def _configure_energy_history(self, **kwargs):
+        # Total energy consumed - persists across restarts
+        self.add_settable_path('/History/EnergyIn', 0, 0, 1000000, gettextcallback=ENERGY_TEXT)
+        # Load settable energy path into local values for batch updates
+        self._local_values['/History/EnergyIn'] = self.service['/History/EnergyIn']
+        # Internal Wh accumulator for precision
+        self._energy_in_wh = self._local_values['/History/EnergyIn'] * 1000  # Convert from kWh to Wh
 
     def _increment_energy_usage(self, change):
-        self._local_values['/History/EnergyIn'] += change
+        # Accumulate in Wh for precision (change is in kWh from toKWh)
+        self._energy_in_wh += change * 1000
+        # Update kWh value for publishing
+        self._local_values['/History/EnergyIn'] = self._energy_in_wh / 1000
 
 
 class DCSourceServiceMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _configure_energy_history(self):
-        self.service.add_path('/History/EnergyOut', 0, gettextcallback=ENERGY_TEXT)
+    def _configure_energy_history(self, **kwargs):
+        # Total energy generated - persists across restarts
+        self.add_settable_path('/History/EnergyOut', 0, 0, 1000000, gettextcallback=ENERGY_TEXT)
+        # MonitorMode: -1=Generic, -2=AC Charger, -3=DC/DC Charger, -4=Water Gen, -7=Shaft Gen, -8=Wind Charger
+        monitorMode = kwargs.get('monitorMode', -1)  # Default to Generic Source
+        self.add_settable_path("/Settings/MonitorMode", monitorMode, -8, -1)
+        # Load settable energy path into local values for batch updates
+        self._local_values['/History/EnergyOut'] = self.service['/History/EnergyOut']
+        # Internal Wh accumulator for precision
+        self._energy_out_wh = self._local_values['/History/EnergyOut'] * 1000  # Convert from kWh to Wh
 
     def _increment_energy_usage(self, change):
-        self._local_values['/History/EnergyOut'] += change
+        # Accumulate in Wh for precision (change is in kWh from toKWh)
+        self._energy_out_wh += change * 1000
+        # Update kWh value for publishing
+        self._local_values['/History/EnergyOut'] = self._energy_out_wh / 1000
 
 
 class PVChargerServiceMixin:
@@ -210,8 +231,8 @@ class PVChargerServiceMixin:
         self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
         
         # Energy yield - stored in kWh as per Victron standard, UI will format as Wh/kWh automatically
-        self.add_settable_path('/Yield/User', 0, 0, 1000000, silent=True)
-        self.add_settable_path('/Yield/System', 0, 0, 1000000, silent=True)
+        self.add_settable_path('/Yield/User', 0, 0, 1000000)  # Total yield - visible in UI
+        self.add_settable_path('/Yield/System', 0, 0, 1000000)  # Total yield - visible in UI
         
         # Charger state and mode
         self.service.add_path("/State", self.STATE_BULK)
@@ -222,10 +243,10 @@ class PVChargerServiceMixin:
         self.service.add_path("/MppOperationMode", 2)  # 0 = Off, 1 = Voltage/current limited, 2 = MPPT active
         
         # History - daily values also persist to survive restarts, stored in kWh
-        self.add_settable_path("/History/Daily/0/Yield", 0, 0, 1000000, silent=True)
-        self.add_settable_path("/History/Daily/0/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
-        self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000, silent=True)
-        self.add_settable_path("/History/Daily/1/MaxPower", 0, 0, 1000000, silent=True, gettextcallback=POWER_TEXT)
+        self.add_settable_path("/History/Daily/0/Yield", 0, 0, 1000000)  # Today's yield - visible in UI
+        self.add_settable_path("/History/Daily/0/MaxPower", 0, 0, 1000000, gettextcallback=POWER_TEXT)
+        self.add_settable_path("/History/Daily/1/Yield", 0, 0, 1000000)  # Yesterday's yield
+        self.add_settable_path("/History/Daily/1/MaxPower", 0, 0, 1000000, gettextcallback=POWER_TEXT)
         self.add_settable_path("/History/LastDay", datetime.now().day, 1, 31, silent=True)  # Track day for rollover detection
         
         # Initialize local values for batch updates

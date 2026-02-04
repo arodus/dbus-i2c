@@ -5,14 +5,14 @@ import time
 
 
 class INA226Service(DCI2CService):
-    def __init__(self, conn, i2cBus, i2cAddr, serviceType, maxExpectedCurrent, shuntResistance):
-        super().__init__(conn, i2cBus, i2cAddr, serviceType, 'INA226', maxExpectedCurrent=maxExpectedCurrent, shuntResistance=shuntResistance)
+    def __init__(self, conn, i2cBus, i2cAddr, serviceType, maxExpectedCurrent, shuntResistance, **kwargs):
+        super().__init__(conn, i2cBus, i2cAddr, serviceType, 'INA226', maxExpectedCurrent=maxExpectedCurrent, shuntResistance=shuntResistance, **kwargs)
 
-    def _configure_service(self, maxExpectedCurrent, shuntResistance):
+    def _configure_service(self, maxExpectedCurrent, shuntResistance, **kwargs):
         self.device = INA226(busnum=self.i2cBus, address=self.i2cAddr, max_expected_amps=maxExpectedCurrent, shunt_ohms=shuntResistance, log_level=logging.INFO)
         self.device.configure(avg_mode=INA226.AVG_4BIT, bus_ct=INA226.VCT_2116us_BIT, shunt_ct=INA226.VCT_2116us_BIT)
         self.device.sleep()
-        super()._configure_service()
+        super()._configure_service(**kwargs)
 
     def update(self):
         self.device.wake()
@@ -52,10 +52,10 @@ class INA226PVChargerService(PVChargerServiceMixin, SimpleI2CService):
     - supply_voltage() reads battery voltage
     - current() reads charging current (positive = charging)
     """
-    def __init__(self, conn, i2cBus, i2cAddr, maxExpectedCurrent, shuntResistance):
+    def __init__(self, conn, i2cBus, i2cAddr, maxExpectedCurrent, shuntResistance, **kwargs):
         # Call SimpleI2CService.__init__ directly to avoid DCI2CService paths
         SimpleI2CService.__init__(self, conn, i2cBus, i2cAddr, 'solarcharger', 'INA226-PVCharger',
-                                  maxExpectedCurrent=maxExpectedCurrent, shuntResistance=shuntResistance)
+                                  maxExpectedCurrent=maxExpectedCurrent, shuntResistance=shuntResistance, **kwargs)
 
     def _configure_service(self, maxExpectedCurrent, shuntResistance):
         self.device = INA226(busnum=self.i2cBus, address=self.i2cAddr, max_expected_amps=maxExpectedCurrent, 
