@@ -132,7 +132,6 @@ class DCI2CService(SimpleI2CService):
     def _configure_service(self, **kwargs):
         self.service.add_path("/Dc/0/Voltage", None, gettextcallback=VOLTAGE_TEXT)
         self.service.add_path("/Dc/0/Current", None, gettextcallback=CURRENT_TEXT)
-        self._configure_energy_history(**kwargs)
         self.service.add_path("/Alarms/LowVoltage", 0)
         self.service.add_path("/Alarms/HighVoltage", 0)
         self.service.add_path("/Alarms/LowTemperature", 0)
@@ -141,11 +140,14 @@ class DCI2CService(SimpleI2CService):
         self.service.add_path("/History/MaximumVoltage", 0, gettextcallback=VOLTAGE_TEXT)
         self.service.add_path("/History/MaximumCurrent", 0, gettextcallback=CURRENT_TEXT)
         self.service.add_path("/History/MaximumPower", 0, gettextcallback=POWER_TEXT)
+        # Initialize _local_values BEFORE calling _configure_energy_history
         self._local_values = {}
         for path, dbusobj in self.service._dbusobjects.items():
             if not dbusobj._writeable:
                 self._local_values[path] = self.service[path]
         self.lastPower = None
+        # Call after _local_values is initialized
+        self._configure_energy_history(**kwargs)
 
     def _update(self, voltage, current, power, now):
         self._local_values["/Dc/0/Voltage"] = voltage
