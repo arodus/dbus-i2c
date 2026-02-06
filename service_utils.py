@@ -111,8 +111,8 @@ class TemperatureService(SimpleI2CService):
         self.service.add_path("/Temperature", None)
         # default type is battery
         self.add_settable_path("/TemperatureType", TemperatureService.TYPE_BATTERY, 0, 6)
-        self.service.add_path("/History/MinimumTemperature", None)
-        self.service.add_path("/History/MaximumTemperature", None)
+        self.add_settable_path("/History/MinimumTemperature", 1000, -100, 1000, silent=True)  # High initial value for min tracking
+        self.add_settable_path("/History/MaximumTemperature", -1000, -100, 1000, silent=True)  # Low initial value for max tracking
 
     def _update(self, temp, humidity, pressure):
         temp = round(temp, 1)
@@ -137,17 +137,19 @@ class DCI2CService(SimpleI2CService):
         self.service.add_path("/Alarms/LowTemperature", 0)
         self.service.add_path("/Alarms/HighTemperature", 0)
         self.service.add_path("/Dc/0/Power", None, gettextcallback=POWER_TEXT)
-        self.service.add_path("/History/MaximumVoltage", 0, gettextcallback=VOLTAGE_TEXT)
-        self.service.add_path("/History/MaximumCurrent", 0, gettextcallback=CURRENT_TEXT)
-        self.service.add_path("/History/MaximumPower", 0, gettextcallback=POWER_TEXT)
-        # Initialize _local_values BEFORE calling _configure_energy_history
+        self.add_settable_path("/History/MaximumVoltage", 0, 0, 1000, silent=True, gettextcallback=VOLTAGE_TEXT)
+        self.add_settable_path("/History/MaximumCurrent", 0, 0, 10000, silent=True, gettextcallback=CURRENT_TEXT)
+        self.add_settable_path("/History/MaximumPower", 0, 0, 100000, silent=True, gettextcallback=POWER_TEXT)
         self._local_values = {}
         for path, dbusobj in self.service._dbusobjects.items():
             if not dbusobj._writeable:
                 self._local_values[path] = self.service[path]
-        self.lastPower = None
-        # Call after _local_values is initialized
+        # Load history settable paths into local values for batch updates
+        self._local_values['/History/MaximumVoltage'] = self.service['/History/MaximumVoltage']
+        self._local_values['/History/MaximumCurrent'] = self.service['/History/MaximumCurrent']
+        self._local_values['/History/MaximumPower'] = self.service['/History/MaximumPower']
         self._configure_energy_history(**kwargs)
+        self.lastPower = None
 
     def _update(self, voltage, current, power, now):
         self._local_values["/Dc/0/Voltage"] = voltage
@@ -229,6 +231,12 @@ class PVChargerServiceMixin:
         self.service.add_path("/Dc/0/Voltage", None, gettextcallback=VOLTAGE_TEXT)
         self.service.add_path("/Dc/0/Current", None, gettextcallback=CURRENT_TEXT)
         
+        # PV side measurements (mirror battery side since we only measure after charge controller)
+        self.service.add_path("/Pv/V", None, gettextcallback=VOLTAGE_TEXT)
+        
+        # Number of trackers (1 for single INA226 monitor)
+        self.service.add_path("/NrOfTrackers", 1)
+        
         # Power measurements
         self.service.add_path("/Yield/Power", None, gettextcallback=POWER_TEXT)
         
@@ -295,6 +303,7 @@ class PVChargerServiceMixin:
         
         self._local_values["/Dc/0/Voltage"] = voltage
         self._local_values["/Dc/0/Current"] = current
+        self._local_values["/Pv/V"] = voltage  # Mirror battery voltage to PV voltage
         self._local_values["/Yield/Power"] = power
         
         # Update daily max power
