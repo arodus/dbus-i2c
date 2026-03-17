@@ -22,6 +22,13 @@ class INA219Service(DCI2CService):
         voltage = round(self._voltage(), 3)
         current = self.current_direction * round(self.device.current()/1000, 3)
         power = round(self.device.power()/1000, 3)
+        # Clamp negative power to 0
+        if power < 0:
+            power = 0
+        # If power < 1W, set both power and current to 0
+        if power < 1:
+            power = 0
+            current = 0
         now = time.perf_counter()  # record the time as close to measurement-taking as possible
         self.device.sleep()
         super()._update(voltage, current, power, now)

@@ -47,6 +47,13 @@ class INA226HardwareMixin:
             voltage = round(self._voltage(), 3)
             current = round(self.device.current()/1000, 3)
             power = round(self.device.power()/1000, 3)
+            # Clamp negative power to 0
+            if power < 0:
+                power = 0
+            # If power < 1W, set both power and current to 0
+            if power < 1:
+                power = 0
+                current = 0
             now = time.perf_counter()
             return voltage, current, power, now
         except OSError as e:
